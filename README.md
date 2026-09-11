@@ -58,7 +58,7 @@ node .\fzu-exam-browser.js fill --exam 596576
 - `--url <exam-url>`：指定考试地址；可传 take/review 地址，脚本会自动归一化
 - `--exam <exam-id|url>`：`--url` 的别名
 - `--allow-number-fallback`：题干匹配失败时，才允许按题号使用 `answer-key.json`
-- `--guess <letters>`：未匹配题使用指定答案兜底，便于复练后从复盘补充题库
+- `--guess <letters>`：仅用于刷题库/复盘的进阶模式；默认不开启，普通填写不会使用
 - `--no-verify`：需要速度时跳过第二遍全卷校验
 
 ## 本次更新

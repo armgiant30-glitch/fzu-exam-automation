@@ -354,7 +354,20 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
   const bankEntry = questionBank[title];
   const matched = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
-  const letters = matched || guess;
+  let letters = matched || guess;
+  let source = matched ? (bankEntry ? "bank" : "number") : "guess";
+  for (const letter of letters) {
+    const count = await tab.playwright.getByText(new RegExp("^" + letter + "[.]")).count();
+    if (count === 0) {
+      if (guess) {
+        letters = guess;
+        source = "guess";
+      } else {
+        letters = "";
+      }
+      break;
+    }
+  }
   if (!letters) {
     unknown.push({ n: n, title: title });
   } else {
@@ -372,7 +385,7 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
         await tab.playwright.waitForTimeout(60);
       }
     }
-    filled.push({ n: n, title: title, answer: letters, source: matched ? (bankEntry ? "bank" : "number") : "guess" });
+    filled.push({ n: n, title: title, answer: letters, source: source });
   }
   if (n < ${TOTAL_QUESTIONS}) {
     const before = await __body(tab);
@@ -556,7 +569,7 @@ Options:
   --url <exam-url>             Use a specific exam URL instead of the current/default one.
   --exam <exam-id|url>         Alias for --url. A numeric ID also needs FZU_GROUP_ID.
   --allow-number-fallback      Use answer-key.json by question number when title matching fails.
-  --guess <letters>            Fill unanswered questions with these letters before review (for repeated practice).
+  --guess <letters>            Optional practice-only fallback; normal fill leaves unknown questions blank.
   --no-verify                  Skip the second full-paper verification pass when speed matters.
 
 Question matching:
