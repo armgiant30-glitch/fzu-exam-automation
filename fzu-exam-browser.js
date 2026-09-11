@@ -338,50 +338,66 @@ function loadAnswers(answerFile) {
   return answers;
 }
 
-function actionFill(bridge, answerFile, allowNumericFallback) {
+function actionFill(bridge, answerFile, allowNumericFallback, guess, verify) {
   const numericAnswers = loadAnswers(answerFile);
   const questionBank = loadQuestionBank();
   const code = browserPrelude(ACTIVE_EXAM, "take") + COMMON_BROWSER_JS + `
 const numericAnswers = ${JSON.stringify(numericAnswers)};
 const questionBank = ${JSON.stringify(questionBank)};
 const allowNumericFallback = ${allowNumericFallback ? "true" : "false"};
+const guess = ${JSON.stringify(guess || "")};
+const verify = ${verify ? "true" : "false"};
 const filled = [];
 const unknown = [];
 await __ensureQuestion(tab, 1);
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
   const bankEntry = questionBank[title];
-  const letters = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
+  const matched = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
+  const letters = matched || guess;
   if (!letters) {
     unknown.push({ n: n, title: title });
   } else {
+    let got = await __selectedLetters(tab);
     for (const letter of letters) {
-      await tab.playwright.getByText(new RegExp("^" + letter + "[.]")).click({ timeoutMs: 10000 });
-      await tab.playwright.waitForTimeout(60);
+      if (!got.includes(letter)) {
+        await tab.playwright.getByText(new RegExp("^" + letter + "[.]")).click({ timeoutMs: 10000 });
+        await tab.playwright.waitForTimeout(60);
+        got = await __selectedLetters(tab);
+      }
     }
-    filled.push({ n: n, title: title, answer: letters, source: bankEntry ? "bank" : "number" });
+    for (const letter of got) {
+      if (!letters.includes(letter)) {
+        await tab.playwright.getByText(new RegExp("^" + letter + "[.]")).click({ timeoutMs: 10000 });
+        await tab.playwright.waitForTimeout(60);
+      }
+    }
+    filled.push({ n: n, title: title, answer: letters, source: matched ? (bankEntry ? "bank" : "number") : "guess" });
   }
   if (n < ${TOTAL_QUESTIONS}) {
     const before = await __body(tab);
     await __nextQuestion(tab, before);
   }
 }
-await __ensureQuestion(tab, 1);
 const mismatches = [];
-for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
-  const title = await __questionTitle(tab);
-  const bankEntry = questionBank[title];
-  const letters = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
-  const got = await __selectedLetters(tab);
-  if (letters && got !== letters) mismatches.push({ n: n, title: title, got: got, want: letters });
-  if (n < ${TOTAL_QUESTIONS}) {
-    const before = await __body(tab);
-    await __nextQuestion(tab, before);
+if (verify) {
+  await __ensureQuestion(tab, 1);
+  for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
+    const title = await __questionTitle(tab);
+    const bankEntry = questionBank[title];
+    const matched = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
+    const letters = matched || guess;
+    const got = await __selectedLetters(tab);
+    if (letters && got !== letters) mismatches.push({ n: n, title: title, got: got, want: letters });
+    if (n < ${TOTAL_QUESTIONS}) {
+      const before = await __body(tab);
+      await __nextQuestion(tab, before);
+    }
   }
 }
-nodeRepl.write(JSON.stringify({ filled: filled.length, unknown: unknown, mismatches: mismatches, submitted: false }, null, 2));
+nodeRepl.write(JSON.stringify({ filled: filled.length, unknown: unknown, mismatches: mismatches, verified: verify, submitted: false }, null, 2));
 `;
-  return bridge.runJs(code, "按题干匹配题库并填写答案，不提交", 240000);
+  return bridge.runJs(code, verify ? "按题干匹配题库并填写答案，不提交" : "快速填写答案，不提交", 240000);
 }
 
 function actionVerify(bridge, answerFile, allowNumericFallback) {
@@ -477,12 +493,30 @@ function parseCli(argv) {
     action,
     file: null,
     allowNumberFallback: false,
+    guess: "",
+    verify: true,
     examUrl: normalizeExamUrl(process.env.FZU_EXAM_URL || DEFAULT_EXAM),
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--allow-number-fallback") {
       parsed.allowNumberFallback = true;
+      continue;
+    }
+    if (arg === "--no-verify") {
+      parsed.verify = false;
+      continue;
+    }
+    if (arg === "--guess") {
+      const value = String(args[++i] || "").trim().toUpperCase();
+      if (!/^[A-E]+$/.test(value)) throw new Error("--guess requires one or more letters A-E");
+      parsed.guess = value;
+      continue;
+    }
+    if (arg.startsWith("--guess=")) {
+      const value = arg.slice("--guess=".length).trim().toUpperCase();
+      if (!/^[A-E]+$/.test(value)) throw new Error("--guess requires one or more letters A-E");
+      parsed.guess = value;
       continue;
     }
     if (arg === "--url" || arg === "--exam") {
@@ -512,7 +546,7 @@ function usage() {
 Usage:
   node fzu-exam-browser.js dump [--url <exam-url>]
   node fzu-exam-browser.js collect [questions.json] [--url <exam-url>]
-  node fzu-exam-browser.js fill [answer-key.json] [--allow-number-fallback] [--url <exam-url>]
+  node fzu-exam-browser.js fill [answer-key.json] [--allow-number-fallback] [--guess <letters>] [--url <exam-url>]
   node fzu-exam-browser.js verify [answer-key.json] [--allow-number-fallback] [--url <exam-url>]
   node fzu-exam-browser.js review [review.json] [--url <exam-url>]
   node fzu-exam-browser.js learn [review.json]
@@ -522,6 +556,8 @@ Options:
   --url <exam-url>             Use a specific exam URL instead of the current/default one.
   --exam <exam-id|url>         Alias for --url. A numeric ID also needs FZU_GROUP_ID.
   --allow-number-fallback      Use answer-key.json by question number when title matching fails.
+  --guess <letters>            Fill unanswered questions with these letters before review (for repeated practice).
+  --no-verify                  Skip the second full-paper verification pass when speed matters.
 
 Question matching:
   fill and verify match by normalized question text in question-bank.json first.
@@ -555,7 +591,7 @@ async function main() {
       return;
     }
     if (cli.action === "fill") {
-      const result = JSON.parse(await actionFill(bridge, cli.file, cli.allowNumberFallback));
+      const result = JSON.parse(await actionFill(bridge, cli.file, cli.allowNumberFallback, cli.guess, cli.verify));
       if (result.unknown && result.unknown.length) {
         writeJson(path.join(HERE, "unknown-questions.json"), result.unknown);
       }

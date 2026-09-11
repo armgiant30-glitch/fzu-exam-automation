@@ -58,6 +58,8 @@ node .\fzu-exam-browser.js fill --exam 596576
 - `--url <exam-url>`：指定考试地址；可传 take/review 地址，脚本会自动归一化
 - `--exam <exam-id|url>`：`--url` 的别名
 - `--allow-number-fallback`：题干匹配失败时，才允许按题号使用 `answer-key.json`
+- `--guess <letters>`：未匹配题使用指定答案兜底，便于复练后从复盘补充题库
+- `--no-verify`：需要速度时跳过第二遍全卷校验
 
 ## 本次更新
 
@@ -65,7 +67,7 @@ node .\fzu-exam-browser.js fill --exam 596576
 - 修复了嵌套模板字符串导致正则转义在运行时丢失的问题
 - 增加 `--url` / `--exam` 参数，避免每次修改脚本里的考试地址
 - `bank` / `learn` 不再启动浏览器桥
-- 已将 `question-bank.json` 扩充到 182 条题干答案
+- 已将 `question-bank.json` 扩充到 603 条题干答案
 
 ## 文件
 
