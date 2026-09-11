@@ -2,3 +2,6 @@ node_modules/
 questions.json
 review.json
 unknown-questions.json
+captured-questions.json
+final-answers-*.json
+review-*.json

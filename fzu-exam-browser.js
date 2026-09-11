@@ -8,9 +8,8 @@ const os = require("os");
 const path = require("path");
 
 const HOME = os.homedir();
-const DEFAULT_EXAM = "https://exam.yooc.me/group/10683137/exam/596408";
-const DEFAULT_TAKE = DEFAULT_EXAM + "/take";
-const DEFAULT_REVIEW = DEFAULT_EXAM + "/review";
+const DEFAULT_EXAM = "https://exam.yooc.me/";
+let ACTIVE_EXAM = process.env.FZU_EXAM_URL || DEFAULT_EXAM;
 const TOTAL_QUESTIONS = 100;
 const HERE = __dirname;
 const QUESTION_BANK = path.join(HERE, "question-bank.json");
@@ -46,13 +45,16 @@ function findBrowserClient() {
   const root = path.join(HOME, ".codex", "plugins", "cache", "openai-bundled", "browser");
   if (!exists(root)) throw new Error("OpenAI browser plugin cache not found.");
   const versions = fs.readdirSync(root)
-    .filter((name) => exists(path.join(root, name, "scripts", "browser-client.mjs")))
+    .filter((name) => exists(path.join(root, name, "scripts", "browser-client.mjs")) && exists(path.join(root, name, "scripts", "browser-service.mjs")))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  if (!versions.length) throw new Error("browser-client.mjs not found.");
+  if (!versions.length) throw new Error("browser-client.mjs / browser-service.mjs not found.");
   const version = versions[versions.length - 1];
-  return { version, client: path.join(root, version, "scripts", "browser-client.mjs") };
+  return {
+    version,
+    client: path.join(root, version, "scripts", "browser-client.mjs"),
+    service: path.join(root, version, "scripts", "browser-service.mjs"),
+  };
 }
-
 function findCodexCli() {
   const root = path.join(HOME, "AppData", "Local", "OpenAI", "Codex", "bin");
   if (!exists(root)) return null;
@@ -69,7 +71,7 @@ class NodeReplBridge {
     const repl = findNodeRepl();
     const browser = findBrowserClient();
     const codexCli = findCodexCli();
-    this.paths = { ...repl, browserClient: browser.client, browserVersion: browser.version, codexCli };
+    this.paths = { ...repl, browserClient: browser.client, browserService: browser.service, browserVersion: browser.version, codexCli };
     this.child = null;
     this.buffer = "";
     this.initialized = false;
@@ -93,7 +95,7 @@ class NodeReplBridge {
       BROWSER_USE_CODEX_APP_BUILD_FLAVOR: "prod",
       BROWSER_USE_CODEX_APP_VERSION: this.paths.browserVersion,
       NODE_REPL_TRUSTED_SERVICES: JSON.stringify({
-        browser: this.paths.browserClient.replace(/\\/g, "/"),
+        browser: this.paths.browserService.replace(/\\/g, "/"),
         sky: "@oai/sky/service",
       }),
     };
@@ -196,17 +198,30 @@ class NodeReplBridge {
   }
 }
 
-function browserPrelude(targetUrl) {
+function browserPrelude(targetUrl, tabKind) {
+  const base = String(targetUrl || DEFAULT_EXAM).replace(/\/+$/, "");
   return `
 const { setupBrowserRuntime } = await import(${JSON.stringify(pathToFileUrl(findBrowserClient().client))});
 const agent = await setupBrowserRuntime();
-const browser = await agent.browsers.getForUrl(${JSON.stringify(targetUrl)});
+const browser = await agent.browsers.getForUrl(${JSON.stringify(base || DEFAULT_EXAM)});
 const tabs = await browser.tabs.list();
 if (!tabs.length) throw new Error("No browser tab is currently open.");
-const tab = await browser.tabs.get(tabs[0].id);
+const preferredKind = ${JSON.stringify(tabKind || "")};
+const targetBase = ${JSON.stringify(base)};
+const ranked = tabs.map((item) => {
+  const url = item.url || "";
+  let score = 0;
+  if (preferredKind && url.includes("/" + preferredKind)) score += 100;
+  if (targetBase && targetBase !== "https://exam.yooc.me" && url.startsWith(targetBase)) score += 50;
+  if (url.includes("exam.yooc.me")) score += 10;
+  return { item, score };
+}).sort((a, b) => b.score - a.score);
+if (!ranked[0] || ranked[0].score === 0) {
+  throw new Error("No exam.yooc.me tab found. Open the target exam page first.");
+}
+const tab = await browser.tabs.get(ranked[0].item.id);
 `;
 }
-
 function pathToFileUrl(filePath) {
   return "file:///" + filePath.replace(/\\/g, "/");
 }
@@ -243,13 +258,13 @@ function saveQuestionBank(bank, file = QUESTION_BANK) {
   writeJson(file, ordered);
 }
 
-const COMMON_BROWSER_JS = `
+const COMMON_BROWSER_JS = String.raw`
 async function __body(tab) {
   return await tab.playwright.locator("body").innerText();
 }
 async function __questionNo(tab) {
   const text = await __body(tab);
-  const match = text.match(/(\\d+)\\s*\\/\\s*100/);
+  const match = text.match(/(\d+)\s*\/\s*100/);
   return match ? Number(match[1]) : null;
 }
 async function __ensureQuestion(tab, target) {
@@ -292,14 +307,14 @@ async function __questionTitle(tab) {
 `;
 
 function actionDump(bridge) {
-  const code = browserPrelude(DEFAULT_TAKE) + `
+  const code = browserPrelude(ACTIVE_EXAM, "take") + `
 nodeRepl.write(JSON.stringify({ url: await tab.playwright.evaluate(() => location.href), text: await tab.playwright.locator("body").innerText() }, null, 2));
 `;
   return bridge.runJs(code, "读取当前浏览器页面");
 }
 
 function actionCollect(bridge) {
-  const code = browserPrelude(DEFAULT_TAKE) + COMMON_BROWSER_JS + `
+  const code = browserPrelude(ACTIVE_EXAM, "take") + COMMON_BROWSER_JS + `
 const records = [];
 await __ensureQuestion(tab, 1);
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
@@ -326,7 +341,7 @@ function loadAnswers(answerFile) {
 function actionFill(bridge, answerFile, allowNumericFallback) {
   const numericAnswers = loadAnswers(answerFile);
   const questionBank = loadQuestionBank();
-  const code = browserPrelude(DEFAULT_TAKE) + COMMON_BROWSER_JS + `
+  const code = browserPrelude(ACTIVE_EXAM, "take") + COMMON_BROWSER_JS + `
 const numericAnswers = ${JSON.stringify(numericAnswers)};
 const questionBank = ${JSON.stringify(questionBank)};
 const allowNumericFallback = ${allowNumericFallback ? "true" : "false"};
@@ -372,7 +387,7 @@ nodeRepl.write(JSON.stringify({ filled: filled.length, unknown: unknown, mismatc
 function actionVerify(bridge, answerFile, allowNumericFallback) {
   const numericAnswers = loadAnswers(answerFile);
   const questionBank = loadQuestionBank();
-  const code = browserPrelude(DEFAULT_TAKE) + COMMON_BROWSER_JS + `
+  const code = browserPrelude(ACTIVE_EXAM, "take") + COMMON_BROWSER_JS + `
 const numericAnswers = ${JSON.stringify(numericAnswers)};
 const questionBank = ${JSON.stringify(questionBank)};
 const allowNumericFallback = ${allowNumericFallback ? "true" : "false"};
@@ -400,7 +415,7 @@ nodeRepl.write(JSON.stringify({ checked: ${TOTAL_QUESTIONS}, mismatches: mismatc
 }
 
 function actionReview(bridge) {
-  const code = browserPrelude(DEFAULT_REVIEW) + COMMON_BROWSER_JS + `
+  const code = browserPrelude(ACTIVE_EXAM, "review") + COMMON_BROWSER_JS + `
 const records = [];
 await __ensureQuestion(tab, 1);
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
@@ -442,17 +457,71 @@ function writeJson(file, data) {
   fs.writeFileSync(path.resolve(file), JSON.stringify(data, null, 2), "utf8");
 }
 
+function normalizeExamUrl(value) {
+  let input = String(value || "").trim();
+  if (!input) return DEFAULT_EXAM;
+  if (/^\d+$/.test(input)) {
+    const groupId = String(process.env.FZU_GROUP_ID || "").trim();
+    if (!groupId) throw new Error("Numeric --exam requires FZU_GROUP_ID; pass a full exam URL instead.");
+    return "https://exam.yooc.me/group/" + groupId + "/exam/" + input;
+  }
+  if (/^exam\.yooc\.me\//i.test(input)) input = "https://" + input;
+  if (!/^https?:\/\//i.test(input)) input = "https://exam.yooc.me/" + input.replace(/^\/+/, "");
+  return input.replace(/\/(?:take|review)(?:\/.*)?$/i, "").replace(/\/+$/, "");
+}
+
+function parseCli(argv) {
+  const args = argv.slice(2);
+  const action = args.shift() || "help";
+  const parsed = {
+    action,
+    file: null,
+    allowNumberFallback: false,
+    examUrl: normalizeExamUrl(process.env.FZU_EXAM_URL || DEFAULT_EXAM),
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--allow-number-fallback") {
+      parsed.allowNumberFallback = true;
+      continue;
+    }
+    if (arg === "--url" || arg === "--exam") {
+      const value = args[++i];
+      if (!value) throw new Error(arg + " requires a value");
+      parsed.examUrl = normalizeExamUrl(value);
+      continue;
+    }
+    if (arg.startsWith("--url=")) {
+      parsed.examUrl = normalizeExamUrl(arg.slice("--url=".length));
+      continue;
+    }
+    if (arg.startsWith("--exam=")) {
+      parsed.examUrl = normalizeExamUrl(arg.slice("--exam=".length));
+      continue;
+    }
+    if (arg.startsWith("--")) throw new Error("Unknown option: " + arg);
+    if (parsed.file) throw new Error("Unexpected extra argument: " + arg);
+    parsed.file = arg;
+  }
+  return parsed;
+}
+
 function usage() {
   console.log(`FZU exam browser helper
 
 Usage:
-  node fzu-exam-browser.js dump
-  node fzu-exam-browser.js collect [questions.json]
-  node fzu-exam-browser.js fill [answer-key.json] [--allow-number-fallback]
-  node fzu-exam-browser.js verify [answer-key.json] [--allow-number-fallback]
-  node fzu-exam-browser.js review [review.json]
+  node fzu-exam-browser.js dump [--url <exam-url>]
+  node fzu-exam-browser.js collect [questions.json] [--url <exam-url>]
+  node fzu-exam-browser.js fill [answer-key.json] [--allow-number-fallback] [--url <exam-url>]
+  node fzu-exam-browser.js verify [answer-key.json] [--allow-number-fallback] [--url <exam-url>]
+  node fzu-exam-browser.js review [review.json] [--url <exam-url>]
   node fzu-exam-browser.js learn [review.json]
   node fzu-exam-browser.js bank
+
+Options:
+  --url <exam-url>             Use a specific exam URL instead of the current/default one.
+  --exam <exam-id|url>         Alias for --url. A numeric ID also needs FZU_GROUP_ID.
+  --allow-number-fallback      Use answer-key.json by question number when title matching fails.
 
 Question matching:
   fill and verify match by normalized question text in question-bank.json first.
@@ -464,25 +533,29 @@ Safety:
 }
 
 async function main() {
-  const action = process.argv[2] || "help";
-  if (action === "help" || action === "--help" || action === "-h") return usage();
+  const cli = parseCli(process.argv);
+  if (cli.action === "help" || cli.action === "--help" || cli.action === "-h") return usage();
 
-  const bridge = new NodeReplBridge();
+  ACTIVE_EXAM = cli.examUrl;
+  const browserActions = new Set(["dump", "collect", "fill", "verify", "review"]);
+  let bridge = null;
   try {
-    if (action === "dump") {
+    if (browserActions.has(cli.action)) bridge = new NodeReplBridge();
+
+    if (cli.action === "dump") {
       console.log(await actionDump(bridge));
       return;
     }
-    if (action === "collect") {
+    if (cli.action === "collect") {
       const text = await actionCollect(bridge);
       const records = JSON.parse(text).map((record) => ({ n: record.n, ...parseQuestionRaw(record.raw), raw: record.raw }));
-      const out = process.argv[3] || path.join(HERE, "questions.json");
+      const out = cli.file || path.join(HERE, "questions.json");
       writeJson(out, records);
       console.log("Collected " + records.length + " questions -> " + path.resolve(out));
       return;
     }
-    if (action === "fill") {
-      const result = JSON.parse(await actionFill(bridge, process.argv[3], process.argv.includes("--allow-number-fallback")));
+    if (cli.action === "fill") {
+      const result = JSON.parse(await actionFill(bridge, cli.file, cli.allowNumberFallback));
       if (result.unknown && result.unknown.length) {
         writeJson(path.join(HERE, "unknown-questions.json"), result.unknown);
       }
@@ -490,14 +563,14 @@ async function main() {
       if (result.unknown && result.unknown.length) console.log("Unknown questions -> " + path.join(HERE, "unknown-questions.json"));
       return;
     }
-    if (action === "verify") {
-      console.log(await actionVerify(bridge, process.argv[3], process.argv.includes("--allow-number-fallback")));
+    if (cli.action === "verify") {
+      console.log(await actionVerify(bridge, cli.file, cli.allowNumberFallback));
       return;
     }
-    if (action === "review") {
+    if (cli.action === "review") {
       const text = await actionReview(bridge);
       const records = parseReviewRecords(JSON.parse(text));
-      const out = process.argv[3] || path.join(HERE, "review.json");
+      const out = cli.file || path.join(HERE, "review.json");
       writeJson(out, records);
       const wrong = records.filter((record) => record.wrong);
       if (wrong.length) {
@@ -510,8 +583,8 @@ async function main() {
       }
       return;
     }
-    if (action === "learn") {
-      const file = process.argv[3] ? path.resolve(process.argv[3]) : path.join(HERE, "review.json");
+    if (cli.action === "learn") {
+      const file = cli.file ? path.resolve(cli.file) : path.join(HERE, "review.json");
       const records = JSON.parse(fs.readFileSync(file, "utf8"));
       const bank = loadQuestionBank();
       let added = 0, updated = 0;
@@ -527,14 +600,14 @@ async function main() {
       console.log("Question bank updated: " + Object.keys(bank).length + " keys (+" + added + ", updated " + updated + ") -> " + QUESTION_BANK);
       return;
     }
-    if (action === "bank") {
+    if (cli.action === "bank") {
       const bank = loadQuestionBank();
       console.log("Question bank: " + Object.keys(bank).length + " keys -> " + QUESTION_BANK);
       return;
     }
     usage();
   } finally {
-    bridge.stop();
+    if (bridge) bridge.stop();
   }
 }
 
