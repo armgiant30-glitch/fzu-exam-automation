@@ -232,9 +232,7 @@ function probeCdp(host, port, timeoutMs = 700) {
         try {
           const json = JSON.parse(body);
           resolve(json && json.Browser ? "http://" + host + ":" + port : null);
-        } catch {
-          resolve(null);
-        }
+        } catch { resolve(null); }
       });
     });
     req.on("timeout", () => { req.destroy(); resolve(null); });
@@ -247,32 +245,104 @@ async function findCdpEndpoint() {
     const endpoint = await probeCdp("127.0.0.1", port);
     if (endpoint) return endpoint;
   }
-  throw new Error("No CDP browser found on 127.0.0.1:9222/9223. Start Chrome/Edge with --remote-debugging-port=9222 first.");
+  throw new Error("No CDP browser found on 127.0.0.1:9222/9223.");
+}
+
+function commandPath(command) {
+  try {
+    const tool = process.platform === "win32" ? "where.exe" : "which";
+    const output = require("child_process").execFileSync(tool, [command], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || null;
+  } catch { return null; }
+}
+
+function detectBrowserExecutable() {
+  const configured = process.env.FZU_BROWSER_PATH || process.env.CHROMIUM_BINARY || process.env.BROWSER_PATH;
+  if (configured && exists(configured)) return configured;
+  const candidates = [];
+  if (process.platform === "win32") {
+    const pf = process.env.ProgramFiles || "C:\\Program Files";
+    const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const local = process.env.LOCALAPPDATA || path.join(HOME, "AppData", "Local");
+    candidates.push(
+      path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path.join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path.join(local, "Microsoft", "Edge", "Application", "msedge.exe"),
+    );
+    for (const command of ["chrome.exe", "msedge.exe", "chromium.exe"]) {
+      const found = commandPath(command);
+      if (found) candidates.push(found);
+    }
+  } else if (process.platform === "darwin") {
+    candidates.push(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    );
+    for (const command of ["google-chrome", "microsoft-edge", "chromium", "chromium-browser"]) {
+      const found = commandPath(command);
+      if (found) candidates.push(found);
+    }
+  } else {
+    for (const command of ["google-chrome", "google-chrome-stable", "microsoft-edge", "chromium", "chromium-browser"]) {
+      const found = commandPath(command);
+      if (found) candidates.push(found);
+    }
+    candidates.push("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser");
+  }
+  return candidates.find(exists) || null;
 }
 
 class CdpBridge {
-  constructor(endpoint) {
-    this.endpoint = normalizeCdpEndpoint(endpoint);
+  constructor(options = {}) {
+    this.endpoint = options.endpoint ? normalizeCdpEndpoint(options.endpoint) : null;
+    this.browserPath = options.browserPath || null;
+    this.userDataDir = options.userDataDir || path.join(HOME, ".fzu-exam-browser", "profile");
+    this.headless = Boolean(options.headless);
     this.browser = null;
+    this.context = null;
     this.lastOutput = undefined;
   }
 
   async start() {
-    if (this.browser) return;
+    if (this.browser || this.context) return;
     const { chromium } = requirePlaywright();
+    if (this.endpoint) {
+      try {
+        this.browser = await chromium.connectOverCDP(this.endpoint);
+        return;
+      } catch (error) {
+        throw new Error("Cannot connect CDP browser at " + this.endpoint + ": " + (error && error.message ? error.message : String(error)));
+      }
+    }
+    const executablePath = this.browserPath || detectBrowserExecutable();
+    const launchOptions = {
+      headless: this.headless,
+      args: ["--no-first-run", "--disable-default-apps", "--disable-extensions", "--mute-audio"],
+    };
+    if (executablePath) launchOptions.executablePath = executablePath;
     try {
-      this.browser = await chromium.connectOverCDP(this.endpoint);
+      this.context = await chromium.launchPersistentContext(this.userDataDir, launchOptions);
     } catch (error) {
-      throw new Error("Cannot connect CDP browser at " + this.endpoint + ": " + (error && error.message ? error.message : String(error)));
+      const hint = executablePath
+        ? "Detected browser: " + executablePath
+        : "No system Chrome/Chromium/Edge found and the Playwright browser may not be installed. Run: npx playwright install chromium";
+      throw new Error("Cannot launch browser: " + (error && error.message ? error.message : String(error)) + "\n" + hint);
     }
   }
 
   async getPage(tabKind) {
     const pages = [];
-    for (const context of this.browser.contexts()) {
-      for (const page of context.pages()) pages.push(page);
+    if (this.context) pages.push(...this.context.pages());
+    if (this.browser) {
+      for (const context of this.browser.contexts()) {
+        for (const page of context.pages()) pages.push(page);
+      }
     }
-    if (!pages.length) throw new Error("CDP browser has no open page.");
+    if (!pages.length) throw new Error("Browser has no open page.");
     const examPages = pages.filter((page) => String(page.url()).includes("exam.yooc.me"));
     const pool = examPages.length ? examPages : pages;
     if (tabKind) {
@@ -295,7 +365,7 @@ class CdpBridge {
     };
     let timer;
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("CDP action timed out: " + title)), timeoutMs);
+      timer = setTimeout(() => reject(new Error("Direct browser action timed out: " + title)), timeoutMs);
     });
     try {
       await Promise.race([fn({ playwright: page }, nodeRepl), timeout]);
@@ -306,6 +376,10 @@ class CdpBridge {
   }
 
   stop() {
+    if (this.context) {
+      this.context.close().catch(() => {});
+      this.context = null;
+    }
     if (this.browser) {
       this.browser.close().catch(() => {});
       this.browser = null;
@@ -626,6 +700,11 @@ function parseCli(argv) {
     verify: true,
     cdp: process.env.FZU_CDP || "",
     cdpAuto: false,
+    browser: "",
+    browserPath: process.env.FZU_BROWSER_PATH || "",
+    userDataDir: "",
+    headless: false,
+    standalone: false,
     examUrl: normalizeExamUrl(process.env.FZU_EXAM_URL || DEFAULT_EXAM),
   };
   for (let i = 0; i < args.length; i++) {
@@ -650,6 +729,41 @@ function parseCli(argv) {
     }
     if (arg === "--cdp-auto") {
       parsed.cdpAuto = true;
+      continue;
+    }
+    if (arg === "--browser" || arg === "--browser-path") {
+      const value = args[++i];
+      if (!value) throw new Error(arg + " requires a path or 'auto'");
+      if (value.toLowerCase() === "auto") parsed.browser = "auto";
+      else parsed.browserPath = value;
+      continue;
+    }
+    if (arg.startsWith("--browser=")) {
+      const value = arg.slice("--browser=".length);
+      if (value.toLowerCase() === "auto") parsed.browser = "auto";
+      else parsed.browserPath = value;
+      continue;
+    }
+    if (arg.startsWith("--browser-path=")) {
+      parsed.browserPath = arg.slice("--browser-path=".length);
+      continue;
+    }
+    if (arg === "--user-data-dir") {
+      const value = args[++i];
+      if (!value) throw new Error("--user-data-dir requires a path");
+      parsed.userDataDir = value;
+      continue;
+    }
+    if (arg.startsWith("--user-data-dir=")) {
+      parsed.userDataDir = arg.slice("--user-data-dir=".length);
+      continue;
+    }
+    if (arg === "--headless") {
+      parsed.headless = true;
+      continue;
+    }
+    if (arg === "--standalone" || arg === "--auto-browser") {
+      parsed.standalone = true;
       continue;
     }
     if (arg === "--guess") {
@@ -704,7 +818,12 @@ Options:
   --guess <letters>            Optional practice-only fallback; normal fill leaves unknown questions blank.
   --no-verify                  Skip the second full-paper verification pass when speed matters.
   --cdp <port|url>             Attach to an existing Chrome/Edge CDP endpoint, e.g. --cdp 9222.
-  --cdp-auto                   Auto-detect a CDP browser on 127.0.0.1:9222 or 9223.
+  --cdp-auto                   Try CDP 9222/9223 first, then launch a local browser.
+  --browser <path|auto>        Launch a specified browser, or auto-detect Chrome/Edge/Chromium.
+  --browser-path <path>        Alias for --browser <path>.
+  --user-data-dir <path>       Persistent browser profile for launched mode.
+  --headless                   Launch browser in headless mode.
+  --standalone                 Alias for automatic CDP-then-launch mode.
 
 Question matching:
   fill and verify match by normalized question text in question-bank.json first.
@@ -724,9 +843,22 @@ async function main() {
   let bridge = null;
   try {
     if (browserActions.has(cli.action)) {
-      if (cli.cdp) bridge = new CdpBridge(cli.cdp);
-      else if (cli.cdpAuto) bridge = new CdpBridge(await findCdpEndpoint());
-      else bridge = new NodeReplBridge();
+      if (cli.cdp) {
+        bridge = new CdpBridge({ endpoint: cli.cdp, userDataDir: cli.userDataDir, headless: cli.headless });
+      } else if (cli.browserPath || cli.browser === "auto") {
+        bridge = new CdpBridge({ browserPath: cli.browserPath || detectBrowserExecutable(), userDataDir: cli.userDataDir, headless: cli.headless });
+      } else if (cli.cdpAuto || cli.standalone) {
+        let endpoint = null;
+        try { endpoint = await findCdpEndpoint(); } catch {}
+        bridge = new CdpBridge({
+          endpoint,
+          browserPath: endpoint ? null : (cli.browserPath || detectBrowserExecutable()),
+          userDataDir: cli.userDataDir,
+          headless: cli.headless,
+        });
+      } else {
+        bridge = new NodeReplBridge();
+      }
     }
 
     if (cli.action === "dump") {

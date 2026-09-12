@@ -73,7 +73,30 @@ node .\fzu-exam-browser.js fill --cdp http://127.0.0.1:9222 --url "https://exam.
 node .\fzu-exam-browser.js fill --cdp-auto
 ```
 
-脚本会优先匹配 `exam.yooc.me` 页面；`--cdp-auto` 会依次探测 `127.0.0.1:9222` 和 `9223`。CDP 模式依赖本机可用的 Playwright 模块，可通过 `FZU_PLAYWRIGHT_MODULE` 指定路径。
+脚本会优先匹配 `exam.yooc.me` 页面；`--cdp-auto` 会依次探测 `127.0.0.1:9222` 和 `9223`，找不到时再自动启动本地浏览器。CDP/启动模式依赖本机可用的 Playwright 模块，可通过 `FZU_PLAYWRIGHT_MODULE` 指定路径。
+
+## 无固定浏览器模式
+
+脚本按 WeBan 类似顺序自动选择浏览器：
+
+1. 已有 CDP：`--cdp` / `--cdp-auto`
+2. 环境变量或参数指定：`FZU_BROWSER_PATH`、`CHROMIUM_BINARY`、`--browser-path`
+3. 自动检测系统 Chrome / Edge / Chromium
+4. 最后回退到 Playwright 自带的 Chromium
+
+```powershell
+# CDP 优先，找不到就自动启动本地浏览器
+node .\fzu-exam-browser.js dump --standalone --headless
+
+# 自动选择系统浏览器并保存登录状态
+node .\fzu-exam-browser.js fill --browser auto --user-data-dir "D:\a\fzu-browser-profile"
+
+# 指定任意 Chromium 内核浏览器
+node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --user-data-dir "D:\a\edge-fzu-profile"
+```
+
+`--user-data-dir` 会自动持久化登录状态。首次使用建议先打开考试页登录，再运行 `fill`。
+
 ## 参数
 
 - `--url <exam-url>`：指定考试地址；可传 take/review 地址，脚本会自动归一化
@@ -89,6 +112,7 @@ node .\fzu-exam-browser.js fill --cdp-auto
 - 增加 `--url` / `--exam` 参数，避免每次修改脚本里的考试地址
 - `bank` / `learn` 不再启动浏览器桥
 - 新增 `--cdp` / `--cdp-auto`，可直接接管已有 Chrome/Edge 调试实例
+- 新增 `--browser` / `--browser-path` / `--standalone`，支持自动检测并启动 Chrome、Edge、Chromium，不再固定浏览器
 - 已将 `question-bank.json` 扩充到 679 条题干答案
 
 ## 文件
