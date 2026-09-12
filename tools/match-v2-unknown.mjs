@@ -14,7 +14,7 @@ const bank = JSON.parse(fs.readFileSync(bankFile, 'utf8')).questions || {};
 function norm(value) {
   return String(value || '')
     .replace(/^\s*\d+\s*[.、]\s*/, '')
-    .replace(/^[A-E]\s*[.、]\s*/, '')
+    .replace(/^[A-Z]\s*[.、]\s*/, '')
     .replace(/[\s，。；：、,.()（）【】\[\]“”"'‘’]/g, '')
     .trim();
 }
@@ -22,7 +22,7 @@ function parseOptions(options) {
   const parsed = {};
   for (const item of options || []) {
     const text = typeof item === 'string' ? item : String(item && item.text || '');
-    const match = text.match(/^([A-E])\s*[.、]\s*(.*)$/);
+    const match = text.match(/^([A-Z])\s*[.、]\s*(.*)$/);
     if (match) parsed[match[1]] = match[2].trim();
   }
   return parsed;
@@ -41,3 +41,4 @@ for (const q of questions) {
 }
 fs.writeFileSync(path.resolve(outputFile), JSON.stringify(unknown, null, 2), 'utf8');
 console.log(JSON.stringify({ total: questions.length, matched, unknown: unknown.length, output: path.resolve(outputFile) }, null, 2));
+

@@ -9,7 +9,7 @@ const files = fs.readdirSync(root)
 function normalizeText(value) {
   return String(value || '')
     .replace(/^\s*\d+\s*[.、]\s*/, '')
-    .replace(/^[A-E]\s*[.、]\s*/, '')
+    .replace(/^[A-Z]\s*[.、]\s*/, '')
     .replace(/[\s，。；：、,.()（）【】\[\]“”"'‘’]/g, '')
     .trim();
 }
@@ -17,7 +17,7 @@ function parseOptions(options) {
   const parsed = {};
   for (const item of options || []) {
     const text = String(item && item.text || '').trim();
-    const m = text.match(/^([A-E])\s*[.、]\s*(.*)$/);
+    const m = text.match(/^([A-Z])\s*[.、]\s*(.*)$/);
     if (m) parsed[m[1]] = m[2].trim();
   }
   return parsed;
@@ -37,7 +37,7 @@ for (const file of files) {
   if (!Array.isArray(list)) { skipped++; continue; }
   for (const record of list) {
     records++;
-    const correct = String(record.correct || '').toUpperCase().replace(/[^A-E]/g, '');
+    const correct = String(record.correct || '').toUpperCase().replace(/[^A-Z]/g, '');
     const title = String(record.title || '').trim();
     const options = parseOptions(record.options);
     if (!title || !correct || Object.keys(options).length < 2) { skipped++; continue; }
@@ -58,3 +58,4 @@ const output = { version: 2, generatedAt: new Date().toISOString(), questions };
 fs.writeFileSync(path.join(root, 'question-bank-v2.json'), JSON.stringify(output, null, 2), 'utf8');
 console.log(JSON.stringify({ reviewFiles: files.length, records, questions: Object.keys(questions).length, conflicts: conflicts.length, skipped, sources }, null, 2));
 if (conflicts.length) fs.writeFileSync(path.join(root, 'question-bank-v2-conflicts.json'), JSON.stringify(conflicts, null, 2), 'utf8');
+

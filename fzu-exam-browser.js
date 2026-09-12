@@ -444,14 +444,14 @@ function parseQuestionRaw(raw) {
   const lines = String(raw || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const index = lines.findIndex((line) => /^\d+、\[1分\]$/.test(line));
   const title = index >= 0 ? (lines[index + 1] || "") : "";
-  const options = lines.filter((line) => /^[A-E][.]/.test(line));
+  const options = lines.filter((line) => /^[A-Z][.]/.test(line));
   return { title, options, key: normalizeTitle(title) };
 }
 
 function normalizeBankText(value) {
   return String(value || "")
     .replace(/^\s*\d+\s*[.、]\s*/, "")
-    .replace(/^[A-E]\s*[.、]\s*/, "")
+    .replace(/^[A-Z]\s*[.、]\s*/, "")
     .replace(/[\s，。；：、,.()（）【】\[\]“”"'‘’]/g, "")
     .trim();
 }
@@ -460,7 +460,7 @@ function parseRecordOptions(options) {
   const parsed = {};
   for (const item of options || []) {
     const text = String(item && item.text || "").trim();
-    const match = text.match(/^([A-E])\s*[.、]\s*(.*)$/);
+    const match = text.match(/^([A-Z])\s*[.、]\s*(.*)$/);
     if (match) parsed[match[1]] = match[2].trim();
   }
   return parsed;
@@ -503,7 +503,7 @@ async function __questionOptions(tab) {
   const lines = (await __body(tab)).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const options = {};
   for (const line of lines) {
-    const match = line.match(/^([A-E])\s*[.、]\s*(.*)$/);
+    const match = line.match(/^([A-Z])\s*[.、]\s*(.*)$/);
     if (match) options[match[1]] = match[2].trim();
   }
   return options;
@@ -511,7 +511,7 @@ async function __questionOptions(tab) {
 function __normalizeBankText(value) {
   return String(value || "")
     .replace(/^\s*\d+\s*[.、]\s*/, "")
-    .replace(/^[A-E]\s*[.、]\s*/, "")
+    .replace(/^[A-Z]\s*[.、]\s*/, "")
     .replace(/[\s，。；：、,.()（）【】\[\]“”"'‘’]/g, "")
     .trim();
 }
@@ -724,7 +724,7 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const page = await __body(tab);
   const options = await tab.playwright.evaluate(() =>
     [...document.querySelectorAll("li")]
-      .filter((node) => /^[A-E][.]/.test((node.innerText || "").trim()))
+      .filter((node) => /^[A-Z][.]/.test((node.innerText || "").trim()))
       .map((node) => ({
         text: (node.innerText || "").trim(),
         className: node.className,
@@ -748,10 +748,10 @@ function parseReviewRecords(records) {
     const lines = record.page.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const qIndex = lines.findIndex((line) => /^\d+、\[1分\]$/.test(line));
     const title = qIndex >= 0 ? (lines[qIndex + 1] || "") : "";
-    const correctRaw = (record.page.match(/正确答案[：:]\s*([A-E][A-E、,，\s]*)/) || [])[1] || "";
-    const yoursRaw = (record.page.match(/(?:你的答案|作答|回答)[：:]\s*([A-E][A-E、,，\s]*)/) || [])[1] || "";
-    const correct = correctRaw.replace(/[^A-E]/g, "");
-    const yours = yoursRaw.replace(/[^A-E]/g, "");
+    const correctRaw = (record.page.match(/正确答案[：:]\s*([A-Z][A-Z、,，\s]*)/) || [])[1] || "";
+    const yoursRaw = (record.page.match(/(?:你的答案|作答|回答)[：:]\s*([A-Z][A-Z、,，\s]*)/) || [])[1] || "";
+    const correct = correctRaw.replace(/[^A-Z]/g, "");
+    const yours = yoursRaw.replace(/[^A-Z]/g, "");
     const wrong = /回答错误|答案错误|错误/.test(record.page) || (correct && yours && correct !== yours);
     return { n: record.n, title, key: normalizeTitle(title), correct, yours, wrong, options: record.options };
   });
@@ -767,6 +767,10 @@ function loadTextConfig(file) {
     account: "account",
     "账号": "account",
     "账户": "account",
+    phone: "account",
+    "手机号": "account",
+    "手机号码": "account",
+    "电话号码": "account",
     password: "password",
     "密码": "password",
     examurl: "examUrl",
@@ -879,13 +883,13 @@ function parseCli(argv) {
     }
     if (arg === "--guess") {
       const value = String(args[++i] || "").trim().toUpperCase();
-      if (!/^[A-E]+$/.test(value)) throw new Error("--guess requires one or more letters A-E");
+      if (!/^[A-Z]+$/.test(value)) throw new Error("--guess requires one or more letters A-Z");
       parsed.guess = value;
       continue;
     }
     if (arg.startsWith("--guess=")) {
       const value = arg.slice("--guess=".length).trim().toUpperCase();
-      if (!/^[A-E]+$/.test(value)) throw new Error("--guess requires one or more letters A-E");
+      if (!/^[A-Z]+$/.test(value)) throw new Error("--guess requires one or more letters A-Z");
       parsed.guess = value;
       continue;
     }
@@ -929,7 +933,7 @@ async function pageBodyText(page) {
 
 async function isQuestionPage(page) {
   const body = await pageBodyText(page);
-  return /\d+\s*\/\s*\d+/.test(body) && /(?:^|\n)\s*[A-E][.、]/.test(body);
+  return /\d+\s*\/\s*\d+/.test(body) && /(?:^|\n)\s*[A-Z][.、]/.test(body);
 }
 
 async function firstVisibleLocator(page, selectors) {
@@ -979,7 +983,7 @@ async function fillLoginForm(page, config) {
   ]);
   if (!username || !password) return false;
   if (!hasConfiguredCredentials(config)) {
-    throw new Error("检测到登录页，请在脚本末尾填写 account 和 password 后重新运行。");
+    throw new Error("检测到登录页，请在脚本末尾填写手机号 phone 和密码 password 后重新运行。");
   }
   await username.fill(String(config.account));
   await password.fill(String(config.password));
@@ -1027,7 +1031,7 @@ async function waitForLoginCompletion(page, timeoutMs) {
     if (!password && !/login|auth|passport|sso/i.test(url) && /在线考试|题库|进入考试|开始考试/.test(body)) return;
     await page.waitForTimeout(1000);
   }
-  if (lastErrorText) throw new Error("登录失败：" + lastErrorText + "。请检查文件末尾的 account 和 password。");
+  if (lastErrorText) throw new Error("登录失败：" + lastErrorText + "。请检查文件末尾的 phone 和 password。");
   throw new Error("等待登录超时。请确认已手动完成验证码/二次验证。");
 }
 
@@ -1114,7 +1118,7 @@ function usage() {
   console.log(`FZU exam browser helper
 
 Usage:
-  node fzu-exam-browser.js auto             # 读取文件末尾账号密码，登录并自动填题
+  node fzu-exam-browser.js auto             # 读取文件末尾手机号和密码，登录并自动填题
   node fzu-exam-browser.js dump [--url <exam-url>]
   node fzu-exam-browser.js collect [questions.json] [--url <exam-url>]
   node fzu-exam-browser.js fill [answer-key.json] [--allow-number-fallback] [--guess <letters>] [--url <exam-url>]
@@ -1251,7 +1255,7 @@ async function main() {
       let added = 0, updated = 0;
       for (const record of records) {
         const options = parseRecordOptions(record.options);
-        const reviewLetters = String(record.correct || record.answer || "").toUpperCase().replace(/[^A-E]/g, "");
+        const reviewLetters = String(record.correct || record.answer || "").toUpperCase().replace(/[^A-Z]/g, "");
         const answerTexts = [...reviewLetters].map((letter) => options[letter]).filter(Boolean);
         const key = makeBankKey(record.title || "", options);
         if (!key || !reviewLetters || !answerTexts.length) continue;
@@ -1289,14 +1293,14 @@ async function main() {
 // 只需要修改下面的配置行，等号后面直接填原文，不要加引号。
 // 保存后再次双击“一键考试助手.bat”即可运行。
 // ============================================================
-// account=请填写学号或账号
+// phone=请填写注册认证的手机号码
 // password=请填写密码
 // loginUrl=https://www.yooc.me/mobile/login
 // examUrl=https://exam.yooc.me/group/10683137/exam/596675/take
 // ============================================================
 
 const userConfig = {
-  account: "请填写学号或账号",
+  account: "请填写手机号",
   password: "请填写密码",
   loginUrl: "https://www.yooc.me/mobile/login",
   examUrl: "https://exam.yooc.me/group/10683137/exam/596675/take",
@@ -1315,3 +1319,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
+

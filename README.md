@@ -6,7 +6,7 @@
 
 1. 双击 `一键考试助手.bat`。
 2. 首次运行会自动生成 `fzu-oneclick.local.js`，并用记事本打开；脚本不会自动运行。
-3. 拉到文件最末尾，直接在 `// account=` 后面填账号、`// password=` 后面填密码。`// loginUrl=` 已设为 `https://www.yooc.me/mobile/login`；如果需要换考试页，再修改 `// examUrl=`。等号后面不要加引号。
+3. 拉到文件最末尾，直接在 `// phone=` 后面填注册认证的手机号、`// password=` 后面填密码。`// loginUrl=` 已设为 `https://www.yooc.me/mobile/login`；如果需要换考试页，再修改 `// examUrl=`。等号后面不要加引号。
 4. 保存并关闭记事本，然后再次双击 `一键考试助手.bat`。
 5. 脚本会自动打开浏览器、填写账号密码、进入考试页并按题库填题。遇到验证码或滑块时，在浏览器里手动完成，脚本会继续等待。
 6. 填完后请自己检查答案并手动点击“交卷”。脚本不会自动提交。
@@ -119,7 +119,7 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 
 ## 本次更新
 
-- 新增 `auto` 一键模式：从文件末尾读取账号密码，自动登录、进入考试并填题
+- 新增 `auto` 一键模式：从文件末尾读取账号密码，自动使用手机号和密码登录、进入考试并填题
 - 新增 `一键考试助手.bat`：首次运行自动生成个人副本并用记事本打开
 - 自动处理统一登录页、验证码/滑块等待、开始考试按钮和答题页识别
 - 已接入 Yooc 移动端登录入口：`https://www.yooc.me/mobile/login`
@@ -129,7 +129,7 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 - `bank` / `learn` 不再启动浏览器桥
 - 新增 `--cdp` / `--cdp-auto`，可直接接管已有 Chrome/Edge 调试实例
 - 新增 `--browser` / `--browser-path` / `--standalone`，支持自动检测并启动 Chrome、Edge、Chromium，不再固定浏览器
-- 新增 v2 题库：按“题干 + 选项文本”匹配，不保存答案字母；当前 847 道选项文本题 + 515 道标题文本回退（809 个不同题干）
+- 新增 v2 题库：按“题干 + 选项文本”匹配，不保存答案字母；当前 1474 条 v2 记录，其中 1168 条为完整答案文本；去重后 939 道完整题干+选项答案对
 
 ## 文件
 
@@ -141,8 +141,13 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 - `tools/migrate-v2.mjs`：从复盘记录迁移生成 v2 题库
 - `tools/match-v2-unknown.mjs`：用 v2 题库筛出本轮未命中的题目
 - `question-bank-v2-merge-conflicts.json`：合并其他账号题库时保留的冲突记录
+- `question-bank-combined-full.json`：去重后的完整答案库（939 道）
+- `question-answer-pairs.json` / `question-answer-pairs.csv`：题干、选项、答案文本对照文件
+- `question-pool-final.json`：最终去重题目池
 - `answer-key.json`：按题号保存的可选回退答案
 
 ## 安全说明
 
 脚本不包含提交操作，也不会点击“交卷”。题目、答案表和复盘结果仅用于个人学习与自动化研究，请遵守所在课程的考试与学术规范。
+
+
