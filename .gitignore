@@ -7,3 +7,10 @@ final-answers-*.json
 review-*.json
 captcha-*.png
 .chrome-*-test/
+
+fzu-oneclick.local.js
+.fzu-oneclick-profile/
+.fill-temp/
+acct*-*.json
+round*-*.json
+answer-text-bank*.json

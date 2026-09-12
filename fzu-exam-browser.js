@@ -12,7 +12,8 @@ const DEFAULT_EXAM = "https://exam.yooc.me/";
 let ACTIVE_EXAM = process.env.FZU_EXAM_URL || DEFAULT_EXAM;
 const TOTAL_QUESTIONS = 100;
 const HERE = __dirname;
-const QUESTION_BANK = path.join(HERE, "question-bank.json");
+const QUESTION_BANK_V1 = path.join(HERE, "question-bank.json");
+const QUESTION_BANK = path.join(HERE, "question-bank-v2.json");
 
 function exists(p) {
   try { return fs.existsSync(p); } catch { return false; }
@@ -202,12 +203,15 @@ function requirePlaywright() {
   const candidates = [
     process.env.FZU_PLAYWRIGHT_MODULE,
     path.join(HOME, ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "node", "node_modules", "playwright"),
+    path.join(HERE, "node_modules", "playwright"),
+    path.join(HERE, "node_modules", "playwright-core"),
   ].filter(Boolean);
   for (const candidate of candidates) {
     if (exists(candidate)) return require(candidate);
   }
   try { return require("playwright"); } catch {}
-  throw new Error("Playwright module not found. Set FZU_PLAYWRIGHT_MODULE or install playwright.");
+  try { return require("playwright-core"); } catch {}
+  throw new Error("Playwright module not found. Run: npm install playwright-core, or set FZU_PLAYWRIGHT_MODULE.");
 }
 
 function stripBrowserPrelude(code) {
@@ -352,9 +356,22 @@ class CdpBridge {
     return pool[0];
   }
 
+  async getOrCreatePage(tabKind) {
+    try {
+      return await this.getPage(tabKind);
+    } catch {}
+    if (this.context) return await this.context.newPage();
+    if (this.browser) {
+      const contexts = this.browser.contexts();
+      const context = contexts.length ? contexts[0] : await this.browser.newContext();
+      return await context.newPage();
+    }
+    throw new Error("Browser has no usable page or context.");
+  }
+
   async runJs(code, title, timeoutMs = 180000, tabKind) {
     await this.start();
-    const page = await this.getPage(tabKind);
+    const page = await this.getOrCreatePage(tabKind);
     const body = stripBrowserPrelude(code);
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const fn = new AsyncFunction("tab", "nodeRepl", body);
@@ -431,21 +448,46 @@ function parseQuestionRaw(raw) {
   return { title, options, key: normalizeTitle(title) };
 }
 
+function normalizeBankText(value) {
+  return String(value || "")
+    .replace(/^\s*\d+\s*[.、]\s*/, "")
+    .replace(/^[A-E]\s*[.、]\s*/, "")
+    .replace(/[\s，。；：、,.()（）【】\[\]“”"'‘’]/g, "")
+    .trim();
+}
+
+function parseRecordOptions(options) {
+  const parsed = {};
+  for (const item of options || []) {
+    const text = String(item && item.text || "").trim();
+    const match = text.match(/^([A-E])\s*[.、]\s*(.*)$/);
+    if (match) parsed[match[1]] = match[2].trim();
+  }
+  return parsed;
+}
+
+function makeBankKey(title, options) {
+  const titleKey = normalizeBankText(title);
+  const optionKey = Object.values(options || {}).map(normalizeBankText).sort().join("|");
+  return titleKey + "::" + optionKey;
+}
+
 function loadQuestionBank(file = QUESTION_BANK) {
   if (!exists(file)) return {};
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  const bank = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (typeof value === "string") bank[key] = { answer: value, title: "" };
-    else bank[key] = { answer: String(value.answer || ""), title: String(value.title || "") };
-  }
-  return bank;
+  if (raw && raw.version === 2 && raw.questions) return raw.questions;
+  return {};
+}
+
+function loadLegacyQuestionBank(file = QUESTION_BANK_V1) {
+  if (!exists(file)) return {};
+  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function saveQuestionBank(bank, file = QUESTION_BANK) {
   const ordered = {};
   for (const key of Object.keys(bank).sort()) ordered[key] = bank[key];
-  writeJson(file, ordered);
+  writeJson(file, { version: 2, generatedAt: new Date().toISOString(), questions: ordered });
 }
 
 const COMMON_BROWSER_JS = String.raw`
@@ -456,6 +498,45 @@ async function __questionNo(tab) {
   const text = await __body(tab);
   const match = text.match(/(\d+)\s*\/\s*100/);
   return match ? Number(match[1]) : null;
+}
+async function __questionOptions(tab) {
+  const lines = (await __body(tab)).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const options = {};
+  for (const line of lines) {
+    const match = line.match(/^([A-E])\s*[.、]\s*(.*)$/);
+    if (match) options[match[1]] = match[2].trim();
+  }
+  return options;
+}
+function __normalizeBankText(value) {
+  return String(value || "")
+    .replace(/^\s*\d+\s*[.、]\s*/, "")
+    .replace(/^[A-E]\s*[.、]\s*/, "")
+    .replace(/[\s，。；：、,.()（）【】\[\]“”"'‘’]/g, "")
+    .trim();
+}
+function __bankKey(title, options) {
+  const titleKey = __normalizeBankText(title);
+  const optionKey = Object.values(options || {}).map(__normalizeBankText).sort().join("|");
+  return titleKey + "::" + optionKey;
+}
+function __answerLettersFromEntry(entry, options) {
+  if (!entry) return "";
+  const answerTexts = Array.isArray(entry.answerTexts) ? entry.answerTexts : [];
+  const current = Object.entries(options || {});
+  const letters = [];
+  for (const text of answerTexts) {
+    const wanted = __normalizeBankText(text);
+    const match = current.find(([, optionText]) => __normalizeBankText(optionText) === wanted);
+    if (match) letters.push(match[0]);
+  }
+  if (letters.length) return [...new Set(letters)].sort().join("");
+  for (const letter of String(entry.answerLetters || "")) {
+    const stored = entry.options && entry.options[letter];
+    const currentText = options && options[letter];
+    if (stored && currentText && __normalizeBankText(stored) === __normalizeBankText(currentText)) letters.push(letter);
+  }
+  return [...new Set(letters)].sort().join("");
 }
 async function __ensureQuestion(tab, target) {
   for (let guard = 0; guard < 130; guard++) {
@@ -472,11 +553,14 @@ async function __ensureQuestion(tab, target) {
   throw new Error("Could not navigate to question " + target);
 }
 async function __nextQuestion(tab, before) {
-  await tab.playwright.getByText("下一题").click({ timeoutMs: 10000 });
+  const button = tab.playwright.getByText("下一题");
+  if (!(await button.isEnabled())) return false;
+  await button.click({ timeoutMs: 10000 });
   for (let k = 0; k < 20; k++) {
     await tab.playwright.waitForTimeout(100);
-    if (await __body(tab) !== before) return;
+    if (await __body(tab) !== before) return true;
   }
+  return false;
 }
 async function __selectedLetters(tab) {
   return await tab.playwright.evaluate(() =>
@@ -542,21 +626,22 @@ const unknown = [];
 await __ensureQuestion(tab, 1);
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
-  const bankEntry = questionBank[title];
-  const matched = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
+  const questionOptions = await __questionOptions(tab);
+  const bankEntry = questionBank[__bankKey(title, questionOptions)];
+  const bankLetters = __answerLettersFromEntry(bankEntry, questionOptions);
+  const numberLetters = allowNumericFallback ? numericAnswers[n] : "";
+  const matched = bankLetters || numberLetters;
   let letters = matched || guess;
-  let source = matched ? (bankEntry ? "bank" : "number") : "guess";
+  let source = bankLetters ? "bank" : (numberLetters ? "number" : (guess ? "guess" : ""));
+  const validLetters = [];
   for (const letter of letters) {
     const count = await tab.playwright.getByText(new RegExp("^" + letter + "[.]")).count();
-    if (count === 0) {
-      if (guess) {
-        letters = guess;
-        source = "guess";
-      } else {
-        letters = "";
-      }
-      break;
-    }
+    if (count > 0) validLetters.push(letter);
+  }
+  letters = validLetters.join("");
+  if (!letters && guess) {
+    letters = guess;
+    source = "guess";
   }
   if (!letters) {
     unknown.push({ n: n, title: title });
@@ -587,9 +672,11 @@ if (verify) {
   await __ensureQuestion(tab, 1);
   for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
     const title = await __questionTitle(tab);
-    const bankEntry = questionBank[title];
-    const matched = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
-    const letters = matched || guess;
+    const questionOptions = await __questionOptions(tab);
+    const bankEntry = questionBank[__bankKey(title, questionOptions)];
+    const bankLetters = __answerLettersFromEntry(bankEntry, questionOptions);
+    const numberLetters = allowNumericFallback ? numericAnswers[n] : "";
+    const letters = bankLetters || numberLetters || guess;
     const got = await __selectedLetters(tab);
     if (letters && got !== letters) mismatches.push({ n: n, title: title, got: got, want: letters });
     if (n < ${TOTAL_QUESTIONS}) {
@@ -600,7 +687,7 @@ if (verify) {
 }
 nodeRepl.write(JSON.stringify({ filled: filled.length, unknown: unknown, mismatches: mismatches, verified: verify, submitted: false }, null, 2));
 `;
-  return bridge.runJs(code, verify ? "按题干匹配题库并填写答案，不提交" : "快速填写答案，不提交", 240000, "take");
+  return bridge.runJs(code, verify ? "按题干匹配题库并填写答案，不提交" : "快速填写答案，不提交", 600000, "take");
 }
 
 function actionVerify(bridge, answerFile, allowNumericFallback) {
@@ -615,8 +702,10 @@ const mismatches = [];
 const unknown = [];
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
-  const bankEntry = questionBank[title];
-  const letters = (bankEntry && bankEntry.answer) || (allowNumericFallback ? numericAnswers[n] : "");
+  const questionOptions = await __questionOptions(tab);
+  const bankEntry = questionBank[__bankKey(title, questionOptions)];
+  const bankLetters = __answerLettersFromEntry(bankEntry, questionOptions);
+  const letters = bankLetters || (allowNumericFallback ? numericAnswers[n] : "");
   if (!letters) {
     unknown.push({ n: n, title: title });
   } else {
@@ -665,8 +754,10 @@ function parseReviewRecords(records) {
     const lines = record.page.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const qIndex = lines.findIndex((line) => /^\d+、\[1分\]$/.test(line));
     const title = qIndex >= 0 ? (lines[qIndex + 1] || "") : "";
-    const correct = (record.page.match(/正确答案[：:]\s*([A-E]+)/) || [])[1] || "";
-    const yours = (record.page.match(/(?:你的答案|作答|回答)[：:]\s*([A-E]+)/) || [])[1] || "";
+    const correctRaw = (record.page.match(/正确答案[：:]\s*([A-E][A-E、,，\s]*)/) || [])[1] || "";
+    const yoursRaw = (record.page.match(/(?:你的答案|作答|回答)[：:]\s*([A-E][A-E、,，\s]*)/) || [])[1] || "";
+    const correct = correctRaw.replace(/[^A-E]/g, "");
+    const yours = yoursRaw.replace(/[^A-E]/g, "");
     const wrong = /回答错误|答案错误|错误/.test(record.page) || (correct && yours && correct !== yours);
     return { n: record.n, title, key: normalizeTitle(title), correct, yours, wrong, options: record.options };
   });
@@ -674,6 +765,32 @@ function parseReviewRecords(records) {
 
 function writeJson(file, data) {
   fs.writeFileSync(path.resolve(file), JSON.stringify(data, null, 2), "utf8");
+}
+
+function loadTextConfig(file) {
+  const config = {};
+  const aliases = {
+    account: "account",
+    "账号": "account",
+    "账户": "account",
+    password: "password",
+    "密码": "password",
+    examurl: "examUrl",
+    "考试网址": "examUrl",
+    "考试地址": "examUrl",
+    loginurl: "loginUrl",
+    "登录网址": "loginUrl",
+    "登录地址": "loginUrl",
+  };
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(/^\s*\/\/\s*([^=\s]+)\s*=\s*(.*)$/);
+    if (!match) continue;
+    const key = aliases[match[1].toLowerCase()] || aliases[match[1]];
+    if (!key) continue;
+    config[key] = match[2].replace(/\s+$/, "");
+  }
+  return config;
 }
 
 function normalizeExamUrl(value) {
@@ -691,7 +808,7 @@ function normalizeExamUrl(value) {
 
 function parseCli(argv) {
   const args = argv.slice(2);
-  const action = args.shift() || "help";
+  const action = args.shift() || "auto";
   const parsed = {
     action,
     file: null,
@@ -799,10 +916,211 @@ function parseCli(argv) {
   return parsed;
 }
 
+function isPlaceholder(value) {
+  const text = String(value || "").trim();
+  return !text || /请填写|在这里填|your[_-]?(account|password)|username|password/i.test(text);
+}
+
+function hasConfiguredCredentials(config) {
+  return !isPlaceholder(config.account) && !isPlaceholder(config.password);
+}
+
+async function pageBodyText(page) {
+  try {
+    return await page.locator("body").innerText({ timeout: 5000 });
+  } catch {
+    return "";
+  }
+}
+
+async function isQuestionPage(page) {
+  const body = await pageBodyText(page);
+  return /\d+\s*\/\s*\d+/.test(body) && /(?:^|\n)\s*[A-E][.、]/.test(body);
+}
+
+async function firstVisibleLocator(page, selectors) {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      if (await locator.count() && await locator.isVisible()) return locator;
+    } catch {}
+  }
+  return null;
+}
+
+async function clickFirstVisibleText(page, labels) {
+  for (const label of labels) {
+    const locator = page.getByText(label, { exact: false }).first();
+    try {
+      if (await locator.count() && await locator.isVisible()) {
+        await locator.click({ timeout: 10000 });
+        return label;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function fillLoginForm(page, config) {
+  const username = await firstVisibleLocator(page, [
+    'input[type="text"]:visible',
+    'input[type="email"]:visible',
+    'input[type="tel"]:visible',
+    'input[name*="user" i]:visible',
+    'input[id*="user" i]:visible',
+    'input[name*="account" i]:visible',
+    'input[id*="account" i]:visible',
+    'input[name*="login" i]:visible',
+    'input[id*="login" i]:visible',
+    'input[placeholder*="学号"]:visible',
+    'input[placeholder*="账号"]:visible',
+    'input[placeholder*="用户名"]:visible',
+    'input[placeholder*="手机号"]:visible',
+    'input[placeholder*="user" i]:visible',
+  ]);
+  const password = await firstVisibleLocator(page, [
+    'input[type="password"]:visible',
+    'input[name*="pass" i]:visible',
+    'input[id*="pass" i]:visible',
+  ]);
+  if (!username || !password) return false;
+  if (!hasConfiguredCredentials(config)) {
+    throw new Error("检测到登录页，请在脚本末尾填写 account 和 password 后重新运行。");
+  }
+  await username.fill(String(config.account));
+  await password.fill(String(config.password));
+  const submit = await firstVisibleLocator(page, [
+    '#yooc_submit:visible',
+    'button[type="submit"]:visible',
+    'input[type="submit"]:visible',
+    'input[type="button"]:visible',
+  ]);
+  if (submit) {
+    await submit.click({ timeout: 10000 });
+  } else {
+    const clicked = await clickFirstVisibleText(page, [
+      "登录",
+      "登 录",
+      "立即登录",
+      "统一身份认证登录",
+      "账号登录",
+      "Sign in",
+      "Login",
+    ]);
+    if (!clicked) await password.press("Enter");
+  }
+  return true;
+}
+
+async function waitForLoginCompletion(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let captchaHinted = false;
+  let lastErrorText = "";
+  while (Date.now() < deadline) {
+    if (await isQuestionPage(page)) return;
+    const body = await pageBodyText(page);
+    const url = String(page.url() || "");
+    const password = await firstVisibleLocator(page, ['input[type="password"]:visible']);
+    if (/用户名或密码错误|账号或密码错误|密码错误|账户或密码错误/.test(body)) {
+      lastErrorText = "账号或密码错误";
+    }
+    if (/验证码|captcha|滑块|拖动验证/i.test(body) && !captchaHinted) {
+      captchaHinted = true;
+      console.log("检测到验证码/滑块。请在打开的浏览器中手动完成，脚本会继续等待。");
+    }
+    if (!password && url.includes("exam.yooc.me") && !/login|auth|passport|sso/i.test(url)) return;
+    if (!password && url.includes("www.yooc.me/mobile/") && !/login|auth|passport|sso/i.test(url) && /首页|课程|课群|我的|yooc/i.test(body)) return;
+    if (!password && !/login|auth|passport|sso/i.test(url) && /在线考试|题库|进入考试|开始考试/.test(body)) return;
+    await page.waitForTimeout(1000);
+  }
+  if (lastErrorText) throw new Error("登录失败：" + lastErrorText + "。请检查文件末尾的 account 和 password。");
+  throw new Error("等待登录超时。请确认已手动完成验证码/二次验证。");
+}
+
+async function ensureExamReady(bridge, config) {
+  await bridge.start();
+  const examUrl = normalizeExamUrl(config.examUrl);
+  const page = await bridge.getOrCreatePage("take");
+
+  const loginUrl = String(config.loginUrl || "").trim();
+  console.log("正在打开考试页...");
+  await page.goto(examUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForTimeout(1200);
+  if (await isQuestionPage(page)) return page;
+
+  if (loginUrl) {
+    const password = await firstVisibleLocator(page, ['input[type="password"]:visible']);
+    const onLoginPage = Boolean(password) || /login|auth|passport|sso/i.test(page.url());
+    if (!onLoginPage && page.url() !== loginUrl) {
+      console.log("正在打开移动端登录页...");
+      await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForTimeout(1200);
+      if (await isQuestionPage(page)) return page;
+    }
+  }
+
+  const filled = await fillLoginForm(page, config);
+  if (filled) {
+    console.log("已提交登录信息，正在等待网页登录完成...");
+    await page.waitForTimeout(800);
+    const body = await pageBodyText(page);
+    if (/验证码|captcha|滑块|拖动验证/i.test(body)) {
+      console.log("检测到验证码/滑块。请在打开的浏览器中手动完成，脚本会继续等待。");
+    }
+    await waitForLoginCompletion(page, Math.max(30000, Number(config.loginTimeoutMs) || 300000));
+  } else if (/login|auth|passport|sso/i.test(page.url())) {
+    const clicked = await clickFirstVisibleText(page, ["登录", "统一身份认证登录", "账号登录", "Sign in"]);
+    if (clicked) {
+      await page.waitForTimeout(1200);
+      if (await fillLoginForm(page, config)) {
+        console.log("已提交登录信息，正在等待网页登录完成...");
+        await waitForLoginCompletion(page, Math.max(30000, Number(config.loginTimeoutMs) || 300000));
+      }
+    }
+  }
+
+  if (!(await isQuestionPage(page))) {
+    await page.goto(examUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.waitForTimeout(1200);
+  }
+
+  if (!(await isQuestionPage(page))) {
+    const entered = await clickFirstVisibleText(page, ["开始考试", "进入考试", "开始答题", "进入答题", "继续答题", "继续考试"]);
+    if (entered) console.log("已点击“" + entered + "”，等待题目加载...");
+  }
+
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (await isQuestionPage(page)) return page;
+    await page.waitForTimeout(1000);
+  }
+  const title = await page.title().catch(() => "");
+  throw new Error("没有进入答题页。当前地址：" + page.url() + (title ? "，页面标题：" + title : ""));
+}
+
+function waitForEnter() {
+  return new Promise((resolve) => {
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    };
+    const readline = require("readline");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.once("close", done);
+    rl.question("完成后按 Enter 关闭浏览器... ", () => {
+      rl.close();
+      done();
+    });
+  });
+}
+
 function usage() {
   console.log(`FZU exam browser helper
 
 Usage:
+  node fzu-exam-browser.js auto             # 读取文件末尾账号密码，登录并自动填题
   node fzu-exam-browser.js dump [--url <exam-url>]
   node fzu-exam-browser.js collect [questions.json] [--url <exam-url>]
   node fzu-exam-browser.js fill [answer-key.json] [--allow-number-fallback] [--guess <letters>] [--url <exam-url>]
@@ -826,7 +1144,7 @@ Options:
   --standalone                 Alias for automatic CDP-then-launch mode.
 
 Question matching:
-  fill and verify match by normalized question text in question-bank.json first.
+  fill and verify match by normalized title + option text in question-bank-v2.json first.
   Numeric answer-key.json is only used with --allow-number-fallback.
 
 Safety:
@@ -839,11 +1157,17 @@ async function main() {
   if (cli.action === "help" || cli.action === "--help" || cli.action === "-h") return usage();
 
   ACTIVE_EXAM = cli.examUrl;
-  const browserActions = new Set(["dump", "collect", "fill", "verify", "review"]);
+  const browserActions = new Set(["auto", "dump", "collect", "fill", "verify", "review"]);
   let bridge = null;
   try {
     if (browserActions.has(cli.action)) {
-      if (cli.cdp) {
+      if (cli.action === "auto") {
+        bridge = new CdpBridge({
+          browserPath: cli.browserPath || userConfig.browserPath || detectBrowserExecutable(),
+          userDataDir: cli.userDataDir || userConfig.userDataDir || path.join(HERE, ".fzu-oneclick-profile"),
+          headless: Boolean(cli.headless),
+        });
+      } else if (cli.cdp) {
         bridge = new CdpBridge({ endpoint: cli.cdp, userDataDir: cli.userDataDir, headless: cli.headless });
       } else if (cli.browserPath || cli.browser === "auto") {
         bridge = new CdpBridge({ browserPath: cli.browserPath || detectBrowserExecutable(), userDataDir: cli.userDataDir, headless: cli.headless });
@@ -861,6 +1185,30 @@ async function main() {
       }
     }
 
+    if (cli.action === "auto") {
+      const examUrl = normalizeExamUrl(userConfig.examUrl || DEFAULT_EXAM);
+      ACTIVE_EXAM = examUrl;
+      console.log("考试地址：" + examUrl);
+      await ensureExamReady(bridge, { ...userConfig, examUrl: examUrl });
+      console.log("登录完成，开始按题库填写答案（不会自动交卷）...");
+      const result = JSON.parse(await actionFill(
+        bridge,
+        cli.file,
+        Boolean(cli.allowNumberFallback || userConfig.allowNumberFallback),
+        cli.guess,
+        cli.verify && userConfig.verify !== false
+      ));
+      if (result.unknown && result.unknown.length) {
+        writeJson(path.join(HERE, "unknown-questions.json"), result.unknown);
+      }
+      console.log(JSON.stringify(result, null, 2));
+      if (result.unknown && result.unknown.length) {
+        console.log("未匹配题目 -> " + path.join(HERE, "unknown-questions.json"));
+      }
+      console.log("填写完成。请检查答案后自行点击“交卷”，脚本不会自动提交。");
+      if (userConfig.keepOpen !== false) await waitForEnter();
+      return;
+    }
     if (cli.action === "dump") {
       console.log(await actionDump(bridge));
       return;
@@ -908,20 +1256,30 @@ async function main() {
       const bank = loadQuestionBank();
       let added = 0, updated = 0;
       for (const record of records) {
-        const key = record.key || normalizeTitle(record.title || "");
-        const answer = String(record.correct || record.answer || "").trim();
-        if (!key || !answer) continue;
+        const options = parseRecordOptions(record.options);
+        const answerLetters = String(record.correct || record.answer || "").toUpperCase().replace(/[^A-E]/g, "");
+        const answerTexts = [...answerLetters].map((letter) => options[letter]).filter(Boolean);
+        const key = makeBankKey(record.title || "", options);
+        if (!key || !answerLetters || !answerTexts.length) continue;
         if (bank[key]) updated++;
         else added++;
-        bank[key] = { answer, title: record.title || bank[key]?.title || "" };
+        bank[key] = {
+          title: record.title || bank[key]?.title || "",
+          options,
+          answerLetters,
+          answerTexts,
+          source: path.basename(file),
+        };
       }
       saveQuestionBank(bank);
-      console.log("Question bank updated: " + Object.keys(bank).length + " keys (+" + added + ", updated " + updated + ") -> " + QUESTION_BANK);
+      console.log("Question bank v2 updated: " + Object.keys(bank).length + " questions (+" + added + ", updated " + updated + ") -> " + QUESTION_BANK);
       return;
     }
     if (cli.action === "bank") {
       const bank = loadQuestionBank();
-      console.log("Question bank: " + Object.keys(bank).length + " keys -> " + QUESTION_BANK);
+      const legacy = loadLegacyQuestionBank();
+      console.log("Question bank v2: " + Object.keys(bank).length + " questions -> " + QUESTION_BANK);
+      console.log("Legacy v1 bank: " + Object.keys(legacy).length + " keys -> " + QUESTION_BANK_V1 + " (read-only)");
       return;
     }
     usage();
@@ -930,7 +1288,33 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error && error.stack ? error.stack : String(error));
-  process.exitCode = 1;
-});
+// ============================================================
+// 只需要修改下面的配置行，等号后面直接填原文，不要加引号。
+// 保存后再次双击“一键考试助手.bat”即可运行。
+// ============================================================
+// account=请填写学号或账号
+// password=请填写密码
+// loginUrl=https://www.yooc.me/mobile/login
+// examUrl=https://exam.yooc.me/group/10683137/exam/596675/take
+// ============================================================
+
+const userConfig = {
+  account: "请填写学号或账号",
+  password: "请填写密码",
+  loginUrl: "https://www.yooc.me/mobile/login",
+  examUrl: "https://exam.yooc.me/group/10683137/exam/596675/take",
+  ...loadTextConfig(__filename),
+  userDataDir: "",
+  browserPath: "",
+  loginTimeoutMs: 300000,
+  allowNumberFallback: false,
+  verify: true,
+  keepOpen: true,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error && error.stack ? error.stack : String(error));
+    process.exitCode = 1;
+  });
+}
