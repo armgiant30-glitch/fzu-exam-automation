@@ -139,6 +139,7 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 - `question-bank-v2.json`：按“题干 + 选项文本”保存的 v2 答案库
 - `question-bank.json`：旧版按题干字母保存的 legacy 题库，只读参考
 - `tools/migrate-v2.mjs`：从复盘记录迁移生成 v2 题库
+- `tools/match-v2-unknown.mjs`：用 v2 题库筛出本轮未命中的题目
 - `answer-key.json`：按题号保存的可选回退答案
 
 ## 安全说明
