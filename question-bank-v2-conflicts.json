@@ -7,7 +7,6 @@
         "A": "对",
         "B": "错"
       },
-      "answerLetters": "B",
       "answerTexts": [
         "错"
       ],
@@ -19,7 +18,6 @@
         "A": "对",
         "B": "错"
       },
-      "answerLetters": "A",
       "answerTexts": [
         "对"
       ],
@@ -36,7 +34,6 @@
         "C": "福建省人民政府与国家教育部共建高校",
         "D": "教育部直属高校"
       },
-      "answerLetters": "A",
       "answerTexts": [
         "国家“双一流”建设高校"
       ],
@@ -50,7 +47,6 @@
         "C": "福建省人民政府与国家教育部共建高校",
         "D": "国家“双一流”建设高校"
       },
-      "answerLetters": "A",
       "answerTexts": [
         "国家“211工程”重点建设大学"
       ],

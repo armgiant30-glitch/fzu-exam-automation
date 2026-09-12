@@ -520,7 +520,7 @@ function __bankKey(title, options) {
   const optionKey = Object.values(options || {}).map(__normalizeBankText).sort().join("|");
   return titleKey + "::" + optionKey;
 }
-function __answerLettersFromEntry(entry, options) {
+function __currentOptionLetters(entry, options) {
   if (!entry) return "";
   const answerTexts = Array.isArray(entry.answerTexts) ? entry.answerTexts : [];
   const current = Object.entries(options || {});
@@ -529,12 +529,6 @@ function __answerLettersFromEntry(entry, options) {
     const wanted = __normalizeBankText(text);
     const match = current.find(([, optionText]) => __normalizeBankText(optionText) === wanted);
     if (match) letters.push(match[0]);
-  }
-  if (letters.length) return [...new Set(letters)].sort().join("");
-  for (const letter of String(entry.answerLetters || "")) {
-    const stored = entry.options && entry.options[letter];
-    const currentText = options && options[letter];
-    if (stored && currentText && __normalizeBankText(stored) === __normalizeBankText(currentText)) letters.push(letter);
   }
   return [...new Set(letters)].sort().join("");
 }
@@ -628,11 +622,11 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
   const questionOptions = await __questionOptions(tab);
   const bankEntry = questionBank[__bankKey(title, questionOptions)];
-  const bankLetters = __answerLettersFromEntry(bankEntry, questionOptions);
+  const bankSelection = __currentOptionLetters(bankEntry, questionOptions);
   const numberLetters = allowNumericFallback ? numericAnswers[n] : "";
-  const matched = bankLetters || numberLetters;
+  const matched = bankSelection || numberLetters;
   let letters = matched || guess;
-  let source = bankLetters ? "bank" : (numberLetters ? "number" : (guess ? "guess" : ""));
+  let source = bankSelection ? "bank" : (numberLetters ? "number" : (guess ? "guess" : ""));
   const validLetters = [];
   for (const letter of letters) {
     const count = await tab.playwright.getByText(new RegExp("^" + letter + "[.]")).count();
@@ -674,9 +668,9 @@ if (verify) {
     const title = await __questionTitle(tab);
     const questionOptions = await __questionOptions(tab);
     const bankEntry = questionBank[__bankKey(title, questionOptions)];
-    const bankLetters = __answerLettersFromEntry(bankEntry, questionOptions);
+    const bankSelection = __currentOptionLetters(bankEntry, questionOptions);
     const numberLetters = allowNumericFallback ? numericAnswers[n] : "";
-    const letters = bankLetters || numberLetters || guess;
+    const letters = bankSelection || numberLetters || guess;
     const got = await __selectedLetters(tab);
     if (letters && got !== letters) mismatches.push({ n: n, title: title, got: got, want: letters });
     if (n < ${TOTAL_QUESTIONS}) {
@@ -704,8 +698,8 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
   const questionOptions = await __questionOptions(tab);
   const bankEntry = questionBank[__bankKey(title, questionOptions)];
-  const bankLetters = __answerLettersFromEntry(bankEntry, questionOptions);
-  const letters = bankLetters || (allowNumericFallback ? numericAnswers[n] : "");
+  const bankSelection = __currentOptionLetters(bankEntry, questionOptions);
+  const letters = bankSelection || (allowNumericFallback ? numericAnswers[n] : "");
   if (!letters) {
     unknown.push({ n: n, title: title });
   } else {
@@ -1257,16 +1251,15 @@ async function main() {
       let added = 0, updated = 0;
       for (const record of records) {
         const options = parseRecordOptions(record.options);
-        const answerLetters = String(record.correct || record.answer || "").toUpperCase().replace(/[^A-E]/g, "");
-        const answerTexts = [...answerLetters].map((letter) => options[letter]).filter(Boolean);
+        const reviewLetters = String(record.correct || record.answer || "").toUpperCase().replace(/[^A-E]/g, "");
+        const answerTexts = [...reviewLetters].map((letter) => options[letter]).filter(Boolean);
         const key = makeBankKey(record.title || "", options);
-        if (!key || !answerLetters || !answerTexts.length) continue;
+        if (!key || !reviewLetters || !answerTexts.length) continue;
         if (bank[key]) updated++;
         else added++;
         bank[key] = {
           title: record.title || bank[key]?.title || "",
           options,
-          answerLetters,
           answerTexts,
           source: path.basename(file),
         };

@@ -129,7 +129,7 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 - `bank` / `learn` 不再启动浏览器桥
 - 新增 `--cdp` / `--cdp-auto`，可直接接管已有 Chrome/Edge 调试实例
 - 新增 `--browser` / `--browser-path` / `--standalone`，支持自动检测并启动 Chrome、Edge、Chromium，不再固定浏览器
-- 新增 v2 题库：按“题干 + 选项文本”匹配，不再只依赖答案字母，并从历史复盘迁移出 731 道带选项题
+- 新增 v2 题库：按“题干 + 选项文本”匹配，不保存答案字母，只保存选项文本；已从历史复盘迁移出带完整选项的题目
 
 ## 文件
 

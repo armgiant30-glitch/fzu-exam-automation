@@ -44,7 +44,7 @@ for (const file of files) {
     const answerTexts = [...correct].map((letter) => options[letter]).filter(Boolean);
     if (!answerTexts.length) { skipped++; continue; }
     const key = bankKey(title, options);
-    const entry = { title, options, answerLetters: correct, answerTexts, source: path.basename(file) };
+    const entry = { title, options, answerTexts, source: path.basename(file) };
     const prev = questions[key];
     if (prev && prev.answerTexts.join('|') !== answerTexts.join('|')) {
       conflicts.push({ key, prev, next: entry });
