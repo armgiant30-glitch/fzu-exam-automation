@@ -34,7 +34,7 @@ const unknown = [];
 let matched = 0;
 for (const q of questions) {
   const options = parseOptions(q.options);
-  const entry = bank[key(q.title, options)];
+  const entry = bank[key(q.title, options)] || bank["title::" + norm(q.title)];
   const currentTexts = new Set(Object.values(options).map(norm));
   const ok = entry && (entry.answerTexts || []).length && entry.answerTexts.every((text) => currentTexts.has(norm(text)));
   if (ok) matched++; else unknown.push(q);

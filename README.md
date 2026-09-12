@@ -129,7 +129,7 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 - `bank` / `learn` 不再启动浏览器桥
 - 新增 `--cdp` / `--cdp-auto`，可直接接管已有 Chrome/Edge 调试实例
 - 新增 `--browser` / `--browser-path` / `--standalone`，支持自动检测并启动 Chrome、Edge、Chromium，不再固定浏览器
-- 新增 v2 题库：按“题干 + 选项文本”匹配，不保存答案字母，只保存选项文本；已从历史复盘迁移出带完整选项的题目
+- 新增 v2 题库：按“题干 + 选项文本”匹配，不保存答案字母；当前 847 道选项文本题 + 515 道标题文本回退（809 个不同题干）
 
 ## 文件
 
@@ -140,6 +140,7 @@ node .\fzu-exam-browser.js fill --browser "C:\Program Files (x86)\Microsoft\Edge
 - `question-bank.json`：旧版按题干字母保存的 legacy 题库，只读参考
 - `tools/migrate-v2.mjs`：从复盘记录迁移生成 v2 题库
 - `tools/match-v2-unknown.mjs`：用 v2 题库筛出本轮未命中的题目
+- `question-bank-v2-merge-conflicts.json`：合并其他账号题库时保留的冲突记录
 - `answer-key.json`：按题号保存的可选回退答案
 
 ## 安全说明

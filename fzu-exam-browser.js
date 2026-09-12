@@ -621,7 +621,7 @@ await __ensureQuestion(tab, 1);
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
   const questionOptions = await __questionOptions(tab);
-  const bankEntry = questionBank[__bankKey(title, questionOptions)];
+  const bankEntry = questionBank[__bankKey(title, questionOptions)] || questionBank["title::" + __normalizeBankText(title)];
   const bankSelection = __currentOptionLetters(bankEntry, questionOptions);
   const numberLetters = allowNumericFallback ? numericAnswers[n] : "";
   const matched = bankSelection || numberLetters;
@@ -667,7 +667,7 @@ if (verify) {
   for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
     const title = await __questionTitle(tab);
     const questionOptions = await __questionOptions(tab);
-    const bankEntry = questionBank[__bankKey(title, questionOptions)];
+    const bankEntry = questionBank[__bankKey(title, questionOptions)] || questionBank["title::" + __normalizeBankText(title)];
     const bankSelection = __currentOptionLetters(bankEntry, questionOptions);
     const numberLetters = allowNumericFallback ? numericAnswers[n] : "";
     const letters = bankSelection || numberLetters || guess;
@@ -697,7 +697,7 @@ const unknown = [];
 for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
   const title = await __questionTitle(tab);
   const questionOptions = await __questionOptions(tab);
-  const bankEntry = questionBank[__bankKey(title, questionOptions)];
+  const bankEntry = questionBank[__bankKey(title, questionOptions)] || questionBank["title::" + __normalizeBankText(title)];
   const bankSelection = __currentOptionLetters(bankEntry, questionOptions);
   const letters = bankSelection || (allowNumericFallback ? numericAnswers[n] : "");
   if (!letters) {
@@ -1271,7 +1271,11 @@ async function main() {
     if (cli.action === "bank") {
       const bank = loadQuestionBank();
       const legacy = loadLegacyQuestionBank();
-      console.log("Question bank v2: " + Object.keys(bank).length + " questions -> " + QUESTION_BANK);
+      const entries = Object.values(bank);
+      const optionTextEntries = entries.filter((entry) => entry.options && Object.keys(entry.options).length).length;
+      const titleTextEntries = entries.length - optionTextEntries;
+      const uniqueTitles = new Set(entries.map((entry) => normalizeBankText(entry.titleKey || entry.title))).size;
+      console.log("Question bank v2: " + entries.length + " entries (" + optionTextEntries + " option-text, " + titleTextEntries + " title-text fallback, " + uniqueTitles + " unique titles) -> " + QUESTION_BANK);
       console.log("Legacy v1 bank: " + Object.keys(legacy).length + " keys -> " + QUESTION_BANK_V1 + " (read-only)");
       return;
     }

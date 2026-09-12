@@ -14,3 +14,7 @@ fzu-oneclick.local.js
 acct*-*.json
 round*-*.json
 answer-text-bank*.json
+question-bank-acct2-full.json
+question-pool-combined.json
+v2-missing-from-acct2.json
+acct2-collected-questions.csv
