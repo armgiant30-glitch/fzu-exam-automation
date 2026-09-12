@@ -6,3 +6,4 @@ captured-questions.json
 final-answers-*.json
 review-*.json
 captcha-*.png
+.chrome-cdp-test/

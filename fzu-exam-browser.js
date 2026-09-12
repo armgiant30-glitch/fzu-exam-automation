@@ -169,7 +169,7 @@ class NodeReplBridge {
     this.child.stdin.write(JSON.stringify(message) + "\n");
   }
 
-  async runJs(code, title, timeoutMs = 180000) {
+  async runJs(code, title, timeoutMs = 180000, _tabKind) {
     await this.start();
     const id = this.nextId++;
     const turn = JSON.stringify({
@@ -198,9 +198,124 @@ class NodeReplBridge {
   }
 }
 
+function requirePlaywright() {
+  const candidates = [
+    process.env.FZU_PLAYWRIGHT_MODULE,
+    path.join(HOME, ".cache", "codex-runtimes", "codex-primary-runtime", "dependencies", "node", "node_modules", "playwright"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (exists(candidate)) return require(candidate);
+  }
+  try { return require("playwright"); } catch {}
+  throw new Error("Playwright module not found. Set FZU_PLAYWRIGHT_MODULE or install playwright.");
+}
+
+function stripBrowserPrelude(code) {
+  return String(code).replace(/\/\/ __FZU_PRELUDE_START__[\s\S]*?\/\/ __FZU_PRELUDE_END__\s*/, "");
+}
+
+function normalizeCdpEndpoint(value) {
+  let input = String(value || "").trim();
+  if (!input) throw new Error("--cdp requires a port or http://host:port URL");
+  if (/^\d+$/.test(input)) return "http://127.0.0.1:" + input;
+  if (!/^https?:\/\//i.test(input)) input = "http://" + input;
+  return input.replace(/\/+$/, "");
+}
+
+function probeCdp(host, port, timeoutMs = 700) {
+  return new Promise((resolve) => {
+    const req = require("http").get({ host, port, path: "/json/version", timeout: timeoutMs }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => body += chunk);
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(body);
+          resolve(json && json.Browser ? "http://" + host + ":" + port : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.on("error", () => resolve(null));
+  });
+}
+
+async function findCdpEndpoint() {
+  for (const port of [9222, 9223]) {
+    const endpoint = await probeCdp("127.0.0.1", port);
+    if (endpoint) return endpoint;
+  }
+  throw new Error("No CDP browser found on 127.0.0.1:9222/9223. Start Chrome/Edge with --remote-debugging-port=9222 first.");
+}
+
+class CdpBridge {
+  constructor(endpoint) {
+    this.endpoint = normalizeCdpEndpoint(endpoint);
+    this.browser = null;
+    this.lastOutput = undefined;
+  }
+
+  async start() {
+    if (this.browser) return;
+    const { chromium } = requirePlaywright();
+    try {
+      this.browser = await chromium.connectOverCDP(this.endpoint);
+    } catch (error) {
+      throw new Error("Cannot connect CDP browser at " + this.endpoint + ": " + (error && error.message ? error.message : String(error)));
+    }
+  }
+
+  async getPage(tabKind) {
+    const pages = [];
+    for (const context of this.browser.contexts()) {
+      for (const page of context.pages()) pages.push(page);
+    }
+    if (!pages.length) throw new Error("CDP browser has no open page.");
+    const examPages = pages.filter((page) => String(page.url()).includes("exam.yooc.me"));
+    const pool = examPages.length ? examPages : pages;
+    if (tabKind) {
+      const preferred = pool.find((page) => String(page.url()).includes("/" + tabKind));
+      if (preferred) return preferred;
+    }
+    return pool[0];
+  }
+
+  async runJs(code, title, timeoutMs = 180000, tabKind) {
+    await this.start();
+    const page = await this.getPage(tabKind);
+    const body = stripBrowserPrelude(code);
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    const fn = new AsyncFunction("tab", "nodeRepl", body);
+    this.lastOutput = undefined;
+    const nodeRepl = {
+      write: (value) => { this.lastOutput = value; },
+      emitImage: async () => {},
+    };
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("CDP action timed out: " + title)), timeoutMs);
+    });
+    try {
+      await Promise.race([fn({ playwright: page }, nodeRepl), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+    return this.lastOutput;
+  }
+
+  stop() {
+    if (this.browser) {
+      this.browser.close().catch(() => {});
+      this.browser = null;
+    }
+  }
+}
+
 function browserPrelude(targetUrl, tabKind) {
   const base = String(targetUrl || DEFAULT_EXAM).replace(/\/+$/, "");
-  return `
+  return `// __FZU_PRELUDE_START__
 const { setupBrowserRuntime } = await import(${JSON.stringify(pathToFileUrl(findBrowserClient().client))});
 const agent = await setupBrowserRuntime();
 const browser = await agent.browsers.getForUrl(${JSON.stringify(base || DEFAULT_EXAM)});
@@ -220,6 +335,7 @@ if (!ranked[0] || ranked[0].score === 0) {
   throw new Error("No exam.yooc.me tab found. Open the target exam page first.");
 }
 const tab = await browser.tabs.get(ranked[0].item.id);
+// __FZU_PRELUDE_END__
 `;
 }
 function pathToFileUrl(filePath) {
@@ -310,7 +426,7 @@ function actionDump(bridge) {
   const code = browserPrelude(ACTIVE_EXAM, "take") + `
 nodeRepl.write(JSON.stringify({ url: await tab.playwright.evaluate(() => location.href), text: await tab.playwright.locator("body").innerText() }, null, 2));
 `;
-  return bridge.runJs(code, "读取当前浏览器页面");
+  return bridge.runJs(code, "读取当前浏览器页面", 180000, "take");
 }
 
 function actionCollect(bridge) {
@@ -324,7 +440,7 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
 }
 nodeRepl.write(JSON.stringify(records));
 `;
-  return bridge.runJs(code, "读取当前考试全部题目");
+  return bridge.runJs(code, "读取当前考试全部题目", 240000, "take");
 }
 
 function loadAnswers(answerFile) {
@@ -410,7 +526,7 @@ if (verify) {
 }
 nodeRepl.write(JSON.stringify({ filled: filled.length, unknown: unknown, mismatches: mismatches, verified: verify, submitted: false }, null, 2));
 `;
-  return bridge.runJs(code, verify ? "按题干匹配题库并填写答案，不提交" : "快速填写答案，不提交", 240000);
+  return bridge.runJs(code, verify ? "按题干匹配题库并填写答案，不提交" : "快速填写答案，不提交", 240000, "take");
 }
 
 function actionVerify(bridge, answerFile, allowNumericFallback) {
@@ -440,7 +556,7 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
 }
 nodeRepl.write(JSON.stringify({ checked: ${TOTAL_QUESTIONS}, mismatches: mismatches, unknown: unknown }, null, 2));
 `;
-  return bridge.runJs(code, "按题干校验答案");
+  return bridge.runJs(code, "按题干校验答案", 180000, "take");
 }
 
 function actionReview(bridge) {
@@ -467,7 +583,7 @@ for (let n = 1; n <= ${TOTAL_QUESTIONS}; n++) {
 }
 nodeRepl.write(JSON.stringify(records));
 `;
-  return bridge.runJs(code, "读取复盘页全部题目", 240000);
+  return bridge.runJs(code, "读取复盘页全部题目", 240000, "review");
 }
 
 function parseReviewRecords(records) {
@@ -508,6 +624,8 @@ function parseCli(argv) {
     allowNumberFallback: false,
     guess: "",
     verify: true,
+    cdp: process.env.FZU_CDP || "",
+    cdpAuto: false,
     examUrl: normalizeExamUrl(process.env.FZU_EXAM_URL || DEFAULT_EXAM),
   };
   for (let i = 0; i < args.length; i++) {
@@ -518,6 +636,20 @@ function parseCli(argv) {
     }
     if (arg === "--no-verify") {
       parsed.verify = false;
+      continue;
+    }
+    if (arg === "--cdp") {
+      const value = args[++i];
+      if (!value) throw new Error("--cdp requires a port or URL");
+      parsed.cdp = normalizeCdpEndpoint(value);
+      continue;
+    }
+    if (arg.startsWith("--cdp=")) {
+      parsed.cdp = normalizeCdpEndpoint(arg.slice("--cdp=".length));
+      continue;
+    }
+    if (arg === "--cdp-auto") {
+      parsed.cdpAuto = true;
       continue;
     }
     if (arg === "--guess") {
@@ -571,6 +703,8 @@ Options:
   --allow-number-fallback      Use answer-key.json by question number when title matching fails.
   --guess <letters>            Optional practice-only fallback; normal fill leaves unknown questions blank.
   --no-verify                  Skip the second full-paper verification pass when speed matters.
+  --cdp <port|url>             Attach to an existing Chrome/Edge CDP endpoint, e.g. --cdp 9222.
+  --cdp-auto                   Auto-detect a CDP browser on 127.0.0.1:9222 or 9223.
 
 Question matching:
   fill and verify match by normalized question text in question-bank.json first.
@@ -589,7 +723,11 @@ async function main() {
   const browserActions = new Set(["dump", "collect", "fill", "verify", "review"]);
   let bridge = null;
   try {
-    if (browserActions.has(cli.action)) bridge = new NodeReplBridge();
+    if (browserActions.has(cli.action)) {
+      if (cli.cdp) bridge = new CdpBridge(cli.cdp);
+      else if (cli.cdpAuto) bridge = new CdpBridge(await findCdpEndpoint());
+      else bridge = new NodeReplBridge();
+    }
 
     if (cli.action === "dump") {
       console.log(await actionDump(bridge));

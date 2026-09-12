@@ -53,6 +53,27 @@ $env:FZU_GROUP_ID="10683137"
 node .\fzu-exam-browser.js fill --exam 596576
 ```
 
+## CDP 独立浏览器模式
+
+无需 Codex 内置浏览器时，可以连接已有 Chrome/Edge 的远程调试端口：
+
+1. 启动浏览器并开放 CDP：
+
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="D:\a\chrome-cdp-profile"
+```
+
+2. 在该浏览器中登录并打开考试页。
+
+3. 通过 CDP 运行脚本：
+
+```powershell
+node .\fzu-exam-browser.js dump --cdp 9222
+node .\fzu-exam-browser.js fill --cdp http://127.0.0.1:9222 --url "https://exam.yooc.me/group/<group>/exam/<exam>"
+node .\fzu-exam-browser.js fill --cdp-auto
+```
+
+脚本会优先匹配 `exam.yooc.me` 页面；`--cdp-auto` 会依次探测 `127.0.0.1:9222` 和 `9223`。CDP 模式依赖本机可用的 Playwright 模块，可通过 `FZU_PLAYWRIGHT_MODULE` 指定路径。
 ## 参数
 
 - `--url <exam-url>`：指定考试地址；可传 take/review 地址，脚本会自动归一化
@@ -67,7 +88,8 @@ node .\fzu-exam-browser.js fill --exam 596576
 - 修复了嵌套模板字符串导致正则转义在运行时丢失的问题
 - 增加 `--url` / `--exam` 参数，避免每次修改脚本里的考试地址
 - `bank` / `learn` 不再启动浏览器桥
-- 已将 `question-bank.json` 扩充到 603 条题干答案
+- 新增 `--cdp` / `--cdp-auto`，可直接接管已有 Chrome/Edge 调试实例
+- 已将 `question-bank.json` 扩充到 679 条题干答案
 
 ## 文件
 
